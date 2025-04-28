@@ -4,6 +4,9 @@
 void pola_w_tablicy(Pole pola[3][8][4], int sx, int sy, int rozmiar);
 
 int minus1 = 0;
+std::atomic<bool> running(true);
+MyPhotonListener listener;
+
 void odliczanie()
 {
     while (1)
@@ -12,6 +15,42 @@ void odliczanie()
 
         std::this_thread::sleep_for(dura);
         minus1=1;
+       
+    }
+}
+
+void Plansza::clientServiceLoop(Client& client) {
+    int previous_turn = 0;
+    int prev_players = 1;
+    while (running) {
+        client.service();
+        
+        if (online)
+        {
+            if (host && menu && players != prev_players)
+            {
+                Common::Hashtable eventContent;
+                eventContent.put("mode", nr_trybu);
+                nByte eventCode = 1;
+                ExitGames::LoadBalancing::RaiseEventOptions options;
+                bool eventSent = client.opRaiseEvent(true, eventContent, eventCode, options);
+                prev_players = players;
+            }
+
+
+
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            if (!listener.receivedEventData.empty()) {
+                if (listener.receivedEventData["turn"] != previous_turn) {
+                    previous_turn = listener.receivedEventData["turn"];
+                    ruch = previous_turn;
+                    przeniesienie_figury_przeciwnika();
+                }
+            }
+        }
+       
+
        
     }
 }
@@ -29,38 +68,62 @@ void Plansza::glowna_petla()
     nazwa_r.setFont(font);
     nazwa_b.setFont(font);
     nazwa_w.setFont(font);
-    nazwa_r.setString(playerInput);
+    room.setFont(font);
+    nickname.setFont(font);
+    //nazwa_r.setString(playerInput);
     nazwa_r.setScale(w_size * 0.001, w_size * 0.001);
+    room.setScale(w_size * 0.001, w_size * 0.001);
+    nickname.setScale(w_size * 0.001, w_size * 0.001);
     nazwa_b.setScale(w_size * 0.001, w_size * 0.001);
     nazwa_w.setScale(w_size * 0.001, w_size * 0.001);
     nazwa_r.setPosition(w_size * 0.715, w_size * 0.44);
     nazwa_w.setPosition(w_size * 0.715, w_size * 0.303);
     nazwa_b.setPosition(w_size * 0.715, w_size * 0.37);
-   
+    room.setPosition(w_size * 0.69, w_size / 3);
+    nickname.setPosition(w_size * 0.69, w_size / 2.11);
+
+
+    const ExitGames::Common::JString appId = "3bf3141a-2fda-4b2f-add5-cb80b8d0bb1f";         
+    const ExitGames::Common::JString appVersion = "1.0";       
+    const ExitGames::Common::JString region = "us";
+
+  //  MyPhotonListener listener;
+    ExitGames::LoadBalancing::Client client(listener, appId, appVersion);
+
+    // Po³¹czenie z serwerem
+    client.connect(/*ExitGames::LoadBalancing::ConnectOptions().setServerAddress(region)*/);
+    
+    bool roomCreated = false;
+
+    std::thread serviceThread(&Plansza::clientServiceLoop, this , std::ref(client));
+
 
 
     k = fig[0];
     std::thread th(odliczanie);
-
-    while (window.isOpen())
+    int playerNr;
+   
+   
+    while (window.isOpen() && running)
     {
 
+        
         mouse = (sf::Vector2f)sf::Mouse::getPosition(window);
         if (cala_plansza)
         {
-            przyciski_na_planszy();
+            przyciski_na_planszy(std::ref(client));
 
-            if (minus1 == 1 && !mat && czasy[ruch]>0)
+            if (minus1 == 1 && !mat && czasy[ruch] > 0)
             {
                 minus1 = 0;
                 czasy[ruch]--;
                 int minuty = czasy[ruch] / 600;
                 int sekundy = czasy[ruch] / 10 - minuty * 60;
-                int ulamek = czasy[ruch]  - minuty * 600 - sekundy*10;
+                int ulamek = czasy[ruch] - minuty * 600 - sekundy * 10;
                 std::string sek;
                 std::string min;
-                if(minuty<10)
-                    min ="0"+ std::to_string(minuty);
+                if (minuty < 10)
+                    min = "0" + std::to_string(minuty);
                 else
                     min = std::to_string(minuty);
 
@@ -68,9 +131,9 @@ void Plansza::glowna_petla()
                     sek = "0" + std::to_string(sekundy);
                 else
                     sek = std::to_string(sekundy);
+               
 
-            
-                tczasy[ruch].setString(min+":"+ sek+","+std::to_string(ulamek));
+                tczasy[ruch].setString(min + ":" + sek + "," + std::to_string(ulamek));
 
                 if (czasy[ruch] == 0)
                 {
@@ -83,20 +146,92 @@ void Plansza::glowna_petla()
 
         }
 
+        if (online)
+        {
+
+            if (client.getState() == PeerStates::JoinedLobby && !attemptedJoinOrCreate && roomname != "" && nick != "") {
+                Common::JString roomName = roomname.c_str();
+            
+                client.opJoinOrCreateRoom(roomName);
+                attemptedJoinOrCreate = true;
+            }
+            if (client.getCurrentlyJoinedRoom().getMasterClientID() == client.getLocalPlayer().getNumber())
+                host = true;
+            else
+                host = false;
+
+            playerNr = (client.getLocalPlayer().getNumber() - 1) % 3;
+            if (!host && client.getState() == PeerStates::Joined)
+            {
+                nr_trybu = listener.receivedEventData["mode"];
+                z_tryb.setPosition(tryb[nr_trybu].getPosition());
+                host_started = listener.receivedEventData["host_started"];
+            }
+
+            //  if (listener.receivedEventDataStrings["nickname"]) {
+            if (listener.receivedEventDataStrings.find("nick_white") != listener.receivedEventDataStrings.end()) {
+
+                nazwa_w.setString(listener.receivedEventDataStrings["nick_white"]);
+            }
+            if (listener.receivedEventDataStrings.find("nick_black") != listener.receivedEventDataStrings.end()) {
+                nazwa_b.setString(listener.receivedEventDataStrings["nick_black"]);
+            }
+            if (listener.receivedEventDataStrings.find("nick_red") != listener.receivedEventDataStrings.end()) {
+                nazwa_r.setString(listener.receivedEventDataStrings["nick_red"]);
+            }
+            // }
+
+            players = client.getCurrentlyJoinedRoom().getPlayerCount();
+            if (cala_plansza && players < 3)
+            {
+                client.opLeaveRoom();
+                wybor_rozgrywki = 1;
+                plansza.setTexture(p[1]);
+                plansza.setScale(1 + (float)window.getSize().y / p[0].getSize().y * 0.98, 1 + (float)window.getSize().y / p[0].getSize().y * 0.98);
+                wyjdz.setScale((float)window.getSize().y / pr.getSize().x * 0.4, (float)window.getSize().y / pr.getSize().x * 0.4);
+                roomname = "";
+                nick = "";
+                cala_plansza = 0;
+                usun_p1 = 0;
+                usun_p2 = 0;
+                room.setString(roomname);
+                nickname.setString(nick);
+                wp_nazw = 0;
+                nazwa_b.setString("");
+                nazwa_w.setString("");
+                nazwa_r.setString("");
+                aktualna_nazwa = 0;
+                menu = 0;
+                attemptedJoinOrCreate = false;
+                online = 0;
+                host_started = 0;
+                
+            }
+        }
+        
+        if (menu == 1)
+            obsluga_menu(std::ref(client));
+
+        /*if (wp_nazw)
+            wprowadzanie_nazw();*/
+       /* if (wp_nazw_pok)
+            wprowadzanie_nazwy_pokoju();*/
+
         while (window.pollEvent(event))
         {
+            if (wybor_rozgrywki)
+                wybieranie_rozgrywki();
+            if (wp_nazw)
+                wprowadzanie_nazw();
+            if (wp_nazw_pok)
+                wprowadzanie_nazwy_pokoju();
 
             if (event.type == sf::Event::Closed)
                 window.close();
-            if (menu == 1)
-                obsluga_menu();
+        
 
-            if (wp_nazw)
-                wprowadzanie_nazw();
 
-            
-
-            if (event.type == sf::Event::MouseButtonPressed)
+            if ((event.type == sf::Event::MouseButtonPressed && !online) || (event.type == sf::Event::MouseButtonPressed && playerNr == ruch && online))
                 if (event.key.code == sf::Mouse::Left)
                     for (auto i : fig)
                         if (i->get_sprite().getGlobalBounds().contains(mouse) && i->get_kolor() == ruch && !mat && !kon_czasu)
@@ -111,21 +246,71 @@ void Plansza::glowna_petla()
 
             if (event.type == sf::Event::MouseButtonReleased && is_move)
                 if (event.key.code == sf::Mouse::Left)
-                    przeniesienie_figury();
+                    przeniesienie_figury(std::ref(client));
+            
         }
 
         if (is_move)
             k->set_position(mouse.x + dx, mouse.y + dy);
 
+
         przejscia_menu_plansza();
         wyswietlanie();
     }
     th.join();
-    
+    serviceThread.join();
+
 
 }
 
 
+void Plansza::wybieranie_rozgrywki()
+{
+    if (rozgrywka_online.getGlobalBounds().contains(mouse))
+    {
+        rozgrywka_online.setScale((float)window.getSize().y / r_online.getSize().x * 0.45, (float)window.getSize().y / r_online.getSize().x * 0.45);
+        if (event.type == sf::Event::MouseButtonPressed)
+        {
+            if (event.key.code == sf::Mouse::Left)
+            {
+                online = 1;
+                wybor_rozgrywki = 0;
+                wp_nazw_pok = 1;
+            }
+        }
+    }
+    else
+        rozgrywka_online.setScale((float)window.getSize().y / r_online.getSize().x * 0.4, (float)window.getSize().y / r_online.getSize().x * 0.4);
+
+    if (rozgrywka_lokalna.getGlobalBounds().contains(mouse))
+    {
+        rozgrywka_lokalna.setScale((float)window.getSize().y / r_lokalna.getSize().x * 0.45, (float)window.getSize().y / r_lokalna.getSize().x * 0.45);
+        if (event.type == sf::Event::MouseButtonPressed)
+        {
+            if (event.key.code == sf::Mouse::Left)
+            {
+                online = 0;
+                wybor_rozgrywki = 0;
+                wp_nazw = 1;
+            }
+        }
+    }
+    else
+        rozgrywka_lokalna.setScale((float)window.getSize().y / r_lokalna.getSize().x * 0.4, (float)window.getSize().y / r_lokalna.getSize().x * 0.4);
+
+    if (wyjdz.getGlobalBounds().contains((sf::Vector2f)sf::Mouse::getPosition(window)))
+    {
+        wyjdz.setScale((float)window.getSize().y / pr.getSize().x * 0.45, (float)window.getSize().y / pr.getSize().x * 0.45);
+        if (event.type == sf::Event::MouseButtonPressed)
+        {
+            if (event.key.code == sf::Mouse::Left)
+                window.close();
+        }
+    }
+    else
+        wyjdz.setScale((float)window.getSize().y / pr.getSize().x * 0.4, (float)window.getSize().y / pr.getSize().x * 0.4);
+
+}
 
 
 void Plansza::wprowadzanie_nazw()
@@ -133,31 +318,29 @@ void Plansza::wprowadzanie_nazw()
     
     std::regex reg("[A-Z]\\w{4,14}");
     std::regex reg1("[a-z]");
-  
+
     if (event.key.code == sf::Keyboard::BackSpace)
         playerInput = "";
 
-   
+
     if (event.type == sf::Event::KeyPressed)
     {
         if (event.key.code == sf::Keyboard::Enter)
         {
-            std::cout << playerInput << std::endl;
             if (std::regex_match(playerInput, reg))
                 aktualna_nazwa++;
             playerInput = "";
         }
-       
+
 
     }
 
-    
+
     if (event.type == sf::Event::TextEntered)
     {
 
         playerInput += event.text.unicode;
-
-       
+        
 
         if (aktualna_nazwa == 0)
             nazwa_w.setString(playerInput);
@@ -165,17 +348,142 @@ void Plansza::wprowadzanie_nazw()
             nazwa_b.setString(playerInput);
         else if (aktualna_nazwa == 2)
             nazwa_r.setString(playerInput);
-        else
+        else {
             wp_nazw = 0;
+            menu = 1;
+        }
     }
 
     if (event.key.code == sf::Keyboard::Enter)
     {
         playerInput = "";
     }
+
     kolej_gn.setString(nazwa_w.getString());
-   
-    
+
+    if (powrot.getGlobalBounds().contains((sf::Vector2f)sf::Mouse::getPosition(window)))
+    {
+        powrot.setScale(window.getSize().y * 0.00023, window.getSize().y * 0.00021);
+        if (event.type == sf::Event::MouseButtonPressed)
+        {
+            if (event.key.code == sf::Mouse::Left)
+            {
+                powrot.setScale(window.getSize().y * 0.00018, window.getSize().y * 0.00017);
+
+                wp_nazw = 0;
+                wybor_rozgrywki = 1;
+                nazwa_b.setString("");
+                nazwa_w.setString("");
+                nazwa_r.setString("");
+                aktualna_nazwa = 0;
+            }
+        }
+    }
+    else
+        powrot.setScale(window.getSize().y * 0.00018, window.getSize().y * 0.00017);
+
+    if (wyjdz.getGlobalBounds().contains((sf::Vector2f)sf::Mouse::getPosition(window)))
+    {
+        wyjdz.setScale((float)window.getSize().y / pr.getSize().x * 0.45, (float)window.getSize().y / pr.getSize().x * 0.45);
+        if (event.type == sf::Event::MouseButtonPressed)
+        {
+            if (event.key.code == sf::Mouse::Left)
+                window.close();
+        }
+    }
+    else
+        wyjdz.setScale((float)window.getSize().y / pr.getSize().x * 0.4, (float)window.getSize().y / pr.getSize().x * 0.4);
+}
+
+void Plansza::wprowadzanie_nazwy_pokoju()
+{
+
+    std::regex reg("[A-Z]\\w{4,14}");
+    std::regex reg1("[a-z]");
+
+    if (event.key.code == sf::Keyboard::BackSpace)
+        playerInput = "";
+
+
+    if (event.type == sf::Event::KeyPressed)
+    {
+        if (event.key.code == sf::Keyboard::Enter)
+        {
+
+            
+            if (aktualna_nazwa == 0) {
+                roomname = playerInput;
+            }
+            else if (aktualna_nazwa == 1 && std::regex_match(playerInput, reg)) {
+                nick = playerInput;
+                menu = 1;
+            }
+            if (std::regex_match(playerInput, reg))
+                aktualna_nazwa++;
+            playerInput = "";
+        }
+    }
+    if (powrot.getGlobalBounds().contains((sf::Vector2f)sf::Mouse::getPosition(window)))
+    {
+        powrot.setScale(window.getSize().y * 0.00023, window.getSize().y * 0.00021);
+        if (event.type == sf::Event::MouseButtonPressed)
+        {
+            if (event.key.code == sf::Mouse::Left)
+            {
+                powrot.setScale(window.getSize().y * 0.00018, window.getSize().y * 0.00017);
+
+                wp_nazw_pok = 0;
+                wybor_rozgrywki = 1;
+                nazwa_b.setString("");
+                nazwa_w.setString("");
+                nazwa_r.setString("");
+                roomname = "";
+                nick = "";
+                room.setString(roomname);
+                nickname.setString(nick);
+                aktualna_nazwa = 0;
+            }
+        }
+    }
+    else
+        powrot.setScale(window.getSize().y * 0.00018, window.getSize().y * 0.00017);
+
+    if (wyjdz.getGlobalBounds().contains((sf::Vector2f)sf::Mouse::getPosition(window)))
+    {
+        wyjdz.setScale((float)window.getSize().y / pr.getSize().x * 0.45, (float)window.getSize().y / pr.getSize().x * 0.45);
+        if (event.type == sf::Event::MouseButtonPressed)
+        {
+            if (event.key.code == sf::Mouse::Left)
+                window.close();
+        }
+    }
+    else
+        wyjdz.setScale((float)window.getSize().y / pr.getSize().x * 0.4, (float)window.getSize().y / pr.getSize().x * 0.4);
+
+
+    if (event.type == sf::Event::TextEntered)
+    {
+
+        playerInput += event.text.unicode;
+
+
+
+        if (aktualna_nazwa == 0) {
+            room.setString(playerInput);
+        }
+        else if (aktualna_nazwa == 1)
+            nickname.setString(playerInput);
+        else
+            wp_nazw_pok = 0;
+    }
+
+    if (event.key.code == sf::Keyboard::Enter)
+    {
+        playerInput = "";
+    }
+    //kolej_gn.setString(nazwa_w.getString());
+
+
 }
 
 
@@ -265,6 +573,7 @@ void Plansza::wczytanie_tekstur()
 
 
     pr.loadFromFile("images/rozpocznij2.png");
+    oczekiwanie.loadFromFile("images/oczekiwanie.png");
     pw.loadFromFile("images/wyjdz.png");
     pp.loadFromFile("images/powrot1.png");
     tabela.loadFromFile("images/tabela.png");
@@ -276,6 +585,13 @@ void Plansza::wczytanie_tekstur()
     sw_b.loadFromFile("images/sw_b.png");
     zp.loadFromFile("images/z_pole2.png");
     zp1.loadFromFile("images/z_pole1.png");
+    lg1.loadFromFile("images/graczywpok1.png");
+    lg2.loadFromFile("images/graczywpok2.png");
+    lg3.loadFromFile("images/graczywpok3.png");
+    tnp.loadFromFile("images/nazwa_pok.png");
+    tnn.loadFromFile("images/nickname.png");
+    r_lokalna.loadFromFile("images/lokalna.png");
+    r_online.loadFromFile("images/online.png");
 
     rozpocznij.setTexture(pr);
     wyjdz.setTexture(pw);
@@ -284,6 +600,9 @@ void Plansza::wczytanie_tekstur()
     glosnik.setTexture(g1);
     restart.setTexture(res);
     podswietlenie.setTexture(sw_b);
+    liczba_graczy.setTexture(lg1);
+    rozgrywka_lokalna.setTexture(r_lokalna);
+    rozgrywka_online.setTexture(r_online);
 
     z_pole.setTexture(zp);
     z_pole.setOrigin(zp.getSize().x / 2, zp.getSize().y / 2);
@@ -326,13 +645,23 @@ void Plansza::wczytanie_tekstur()
     plansza.setOrigin(p[0].getSize().x / 2, p[0].getSize().y / 2);
     rozpocznij.setOrigin(pr.getSize().x / 2, pr.getSize().y / 2);
     rozpocznij.setScale((float)window.getSize().y / pr.getSize().x * 0.5, (float)window.getSize().y / pr.getSize().x * 0.5);
+    rozgrywka_lokalna.setOrigin(pr.getSize().x / 2, pr.getSize().y / 2);
+    rozgrywka_lokalna.setScale((float)window.getSize().y / pr.getSize().x * 0.4, (float)window.getSize().y / pr.getSize().x * 0.4);
+    rozgrywka_online.setOrigin(pr.getSize().x / 2, pr.getSize().y / 2);
+    rozgrywka_online.setScale((float)window.getSize().y / pr.getSize().x * 0.4, (float)window.getSize().y / pr.getSize().x * 0.4);
     wyjdz.setOrigin(sf::Vector2f(pr.getSize().x / 2, pr.getSize().y / 2));
     wyjdz.setScale((float)window.getSize().y / pr.getSize().x * 0.4, (float)window.getSize().y / pr.getSize().x * 0.4);
+
+    liczba_graczy.setOrigin(sf::Vector2f(pr.getSize().x / 2, pr.getSize().y / 2));
+    liczba_graczy.setScale((float)window.getSize().y / pr.getSize().x * 0.4, (float)window.getSize().y / pr.getSize().x * 0.4);
 
 
     plansza.setPosition(window.getSize().x / 2, window.getSize().y / 2);
     rozpocznij.setPosition(window.getSize().x / 2, window.getSize().y / 2.15);
+    rozgrywka_online.setPosition(window.getSize().x / 2, window.getSize().y / 2);
+    rozgrywka_lokalna.setPosition(window.getSize().x / 2, window.getSize().y / 3);
     wyjdz.setPosition(window.getSize().x / 2, window.getSize().y / 1.5);
+    liczba_graczy.setPosition(window.getSize().x / 2, window.getSize().y / 1.3);
 
 
     plansza.setScale(1 + (float)window.getSize().y / p[0].getSize().y * 0.98, 1 + (float)window.getSize().y / p[0].getSize().y * 0.98);
@@ -342,6 +671,16 @@ void Plansza::wczytanie_tekstur()
     nazwy.setOrigin(pr.getSize().x / 2, pr.getSize().y / 2);
     nazwy.setScale((float)window.getSize().y / pr.getSize().x * 0.5, (float)window.getSize().y / pr.getSize().x * 0.5);
     nazwy.setPosition(window.getSize().x / 2, window.getSize().y / 3.3);
+
+    tlo_nazwa_pokoju.setTexture(tnp);
+    tlo_nazwa_pokoju.setOrigin(pr.getSize().x / 2, pr.getSize().y / 2);
+    tlo_nazwa_pokoju.setScale((float)window.getSize().y / pr.getSize().x * 0.45, (float)window.getSize().y / pr.getSize().x * 0.45);
+    tlo_nazwa_pokoju.setPosition(window.getSize().x / 2, window.getSize().y / 2.6);
+
+    tlo_nickname.setTexture(tnn);
+    tlo_nickname.setOrigin(pr.getSize().x / 2, pr.getSize().y / 2);
+    tlo_nickname.setScale((float)window.getSize().y / pr.getSize().x * 0.45, (float)window.getSize().y / pr.getSize().x * 0.45);
+    tlo_nickname.setPosition(window.getSize().x / 2, window.getSize().y / 1.9);
 
     for (auto i = 0; i < 3; i++)
     {
@@ -401,26 +740,59 @@ void Plansza::wyswietlanie()
     window.draw(podswietlenie);
     window.draw(plansza);
 
+    if (wybor_rozgrywki)
+    {
+        window.draw(rozgrywka_lokalna);
+        window.draw(rozgrywka_online);
+    }
     if (wp_nazw)
     {
         window.draw(nazwy);
         window.draw(nazwa_r);
         window.draw(nazwa_b);
         window.draw(nazwa_w);
+        window.draw(powrot);
+    }
+    if (wp_nazw_pok)
+    {
+        window.draw(tlo_nazwa_pokoju);
+        window.draw(tlo_nickname);
+        window.draw(room);
+        window.draw(nickname);
+        window.draw(powrot);
     }
     if (usun_p2 == 0  )
     {
         window.draw(wyjdz);
     }
 
-    if (usun_p1 == 0 &&  !wp_nazw)
+    if (usun_p1 == 0 &&  !wp_nazw && !wp_nazw_pok && !wybor_rozgrywki)
     {
+        if (online) {
+            if (!host)
+                rozpocznij.setTexture(oczekiwanie);
+            else
+                rozpocznij.setTexture(pr);
+        }
+        else
+            rozpocznij.setTexture(pr);
         window.draw(rozpocznij);
-     
+       
     }
 
-    if (menu && !wp_nazw)
+    if (menu && !wp_nazw && !wp_nazw_pok)
     {
+        if (online)
+        {
+            if (players == 1)
+                liczba_graczy.setTexture(lg1);
+            else if (players == 2)
+                liczba_graczy.setTexture(lg2);
+            else if (players == 3)
+                liczba_graczy.setTexture(lg3);
+            window.draw(liczba_graczy);
+        }
+
         window.draw(z_tryb);
         window.draw(powrot);
         for (int i = 0; i < 4; i++)
@@ -564,50 +936,149 @@ void Plansza::przejscia_menu_plansza()
 
 
 
-void Plansza::obsluga_menu()
+void Plansza::obsluga_menu(ExitGames::LoadBalancing::Client& client)
 {
-    if (rozpocznij.getGlobalBounds().contains(mouse) && !wp_nazw)
+    if (online)
     {
-        rozpocznij.setScale((float)window.getSize().y / pr.getSize().x * 0.55, (float)window.getSize().y / pr.getSize().x * 0.55);
-        if (event.type == sf::Event::MouseButtonPressed)
+        if ((rozpocznij.getGlobalBounds().contains(mouse) && !wp_nazw && !wp_nazw_pok) || host_started)
         {
-            if (event.key.code == sf::Mouse::Left)
+            rozpocznij.setScale((float)window.getSize().y / pr.getSize().x * 0.55, (float)window.getSize().y / pr.getSize().x * 0.55);
+            if (event.type == sf::Event::MouseButtonPressed || host_started)
             {
-                rozpocznij.setScale((float)window.getSize().y / pr.getSize().x * 0.5, (float)window.getSize().y / pr.getSize().x * 0.5);
-                menu = 0;
-                przejscie1 = 1;
+                if ((event.key.code == sf::Mouse::Left && players == 3 && host) || host_started)
+                {
+                    Common::Hashtable eventContent;
+                    eventContent.put("host_started", 1);
+                    nByte eventCode = 1;
+                    ExitGames::LoadBalancing::RaiseEventOptions options;
 
-                fig.clear();
-                ustawianie_figur();
-                if (nr_trybu != 0)
-                    for (int j = 0; j < 3; j++)
-                    {
-                        czasy[j] = nr_trybu * 6000;
-                        tczasy[j].setString(std::to_string(nr_trybu * 10) + ":00,0");
+                    //  bool eventSent = client.opRaiseEvent(true, eventContent, eventCode, options);
+
+                     // Common::Hashtable eventContentS;
+                     // ExitGames::Common::JString ni = nick.c_str() ;
+                     // eventContent.put("nickname", nick.c_str());
+                     // bool eventSents = client.opRaiseEvent(true, eventContentS, eventCode, options);
+                    if (client.getLocalPlayer().getNumber() == 1) {
+                        nazwa_w.setString(nickname.getString());
+                        eventContent.put("nick_white", nick.c_str());
                     }
-                else
-                    for (int j = 0; j < 3; j++)
-                    {
-                        czasy[j] = 3000;
-                        tczasy[j].setString("05:00,0");
+                    if (client.getLocalPlayer().getNumber() == 2) {
+                        nazwa_b.setString(nickname.getString());
+                        eventContent.put("nick_black", nick.c_str());
                     }
-                ruch = 0;
-                k = nullptr;
-                podswietlenie.setTexture(sw_b);
-                zagrania.clear();
-                szach[0] = 0;
-                kolej_g.setString("Kolej gracza:");
-                kolej_gn.setString(nazwa_w.getString());
-                mat = 0;
-                kon_czasu = 0;
-                szachh.setString("SZACH!");
-                szachh.setPosition(window.getSize().x * 0.86, window.getSize().y * 0.3);
+                    if (client.getLocalPlayer().getNumber() == 3) {
+                        nazwa_r.setString(nickname.getString());
+                        eventContent.put("nick_red", nick.c_str());
+                    }
+
+                    bool eventSent = client.opRaiseEvent(true, eventContent, eventCode, options);
+
+                    rozpocznij.setScale((float)window.getSize().y / pr.getSize().x * 0.5, (float)window.getSize().y / pr.getSize().x * 0.5);
+                    menu = 0;
+                    przejscie1 = 1;
+
+                    fig.clear();
+                    ustawianie_figur();
+                    if (nr_trybu != 0)
+                        for (int j = 0; j < 3; j++)
+                        {
+                            czasy[j] = nr_trybu * 6000;
+                            tczasy[j].setString(std::to_string(nr_trybu * 10) + ":00,0");
+                        }
+                    else
+                        for (int j = 0; j < 3; j++)
+                        {
+                            czasy[j] = 3000;
+                            tczasy[j].setString("05:00,0");
+                        }
+                    ruch = 0;
+                    k = nullptr;
+                    podswietlenie.setTexture(sw_b);
+                    zagrania.clear();
+                    szach[0] = 0;
+                    kolej_g.setString("Kolej gracza:");
+                    kolej_gn.setString(nazwa_w.getString());
+                    mat = 0;
+                    kon_czasu = 0;
+                    szachh.setString("SZACH!");
+                    szachh.setPosition(window.getSize().x * 0.86, window.getSize().y * 0.3);
+
+                    if (nr_trybu != 0)
+                        for (int j = 0; j < 3; j++)
+                        {
+                            czasy[j] = nr_trybu * 6000;
+                            tczasy[j].setString(std::to_string(nr_trybu * 10) + ":00,0");
+                        }
+                    else
+                        for (int j = 0; j < 3; j++)
+                        {
+                            czasy[j] = 3000;
+                            tczasy[j].setString("05:00,0");
+                        }
+                }
             }
         }
+        else
+            rozpocznij.setScale((float)window.getSize().y / pr.getSize().x * 0.5, (float)window.getSize().y / pr.getSize().x * 0.5);
     }
     else
-        rozpocznij.setScale((float)window.getSize().y / pr.getSize().x * 0.5, (float)window.getSize().y / pr.getSize().x * 0.5);
+    {
+        if ((rozpocznij.getGlobalBounds().contains(mouse) && !wp_nazw && !wp_nazw_pok))
+        {
+            rozpocznij.setScale((float)window.getSize().y / pr.getSize().x * 0.55, (float)window.getSize().y / pr.getSize().x * 0.55);
+            if (event.type == sf::Event::MouseButtonPressed)
+            {
+                if (event.key.code == sf::Mouse::Left)
+                {
 
+                    rozpocznij.setScale((float)window.getSize().y / pr.getSize().x * 0.5, (float)window.getSize().y / pr.getSize().x * 0.5);
+                    menu = 0;
+                    przejscie1 = 1;
+
+                    fig.clear();
+                    ustawianie_figur();
+                    if (nr_trybu != 0)
+                        for (int j = 0; j < 3; j++)
+                        {
+                            czasy[j] = nr_trybu * 6000;
+                            tczasy[j].setString(std::to_string(nr_trybu * 10) + ":00,0");
+                        }
+                    else
+                        for (int j = 0; j < 3; j++)
+                        {
+                            czasy[j] = 3000;
+                            tczasy[j].setString("05:00,0");
+                        }
+                    ruch = 0;
+                    k = nullptr;
+                    podswietlenie.setTexture(sw_b);
+                    zagrania.clear();
+                    szach[0] = 0;
+                    kolej_g.setString("Kolej gracza:");
+                    kolej_gn.setString(nazwa_w.getString());
+                    mat = 0;
+                    kon_czasu = 0;
+                    szachh.setString("SZACH!");
+                    szachh.setPosition(window.getSize().x * 0.86, window.getSize().y * 0.3);
+
+                    if (nr_trybu != 0)
+                        for (int j = 0; j < 3; j++)
+                        {
+                            czasy[j] = nr_trybu * 6000;
+                            tczasy[j].setString(std::to_string(nr_trybu * 10) + ":00,0");
+                        }
+                    else
+                        for (int j = 0; j < 3; j++)
+                        {
+                            czasy[j] = 3000;
+                            tczasy[j].setString("05:00,0");
+                        }
+                }
+            }
+        }
+        else
+            rozpocznij.setScale((float)window.getSize().y / pr.getSize().x * 0.5, (float)window.getSize().y / pr.getSize().x * 0.5);
+    }
     if (wyjdz.getGlobalBounds().contains((sf::Vector2f)sf::Mouse::getPosition(window)) )
     {
         wyjdz.setScale((float)window.getSize().y / pr.getSize().x * 0.45, (float)window.getSize().y / pr.getSize().x * 0.45);
@@ -629,11 +1100,22 @@ void Plansza::obsluga_menu()
             {
                 powrot.setScale(window.getSize().y * 0.00018, window.getSize().y * 0.00017);
                 
-                wp_nazw = 1;
-                nazwa_b.setString("");
-                nazwa_w.setString("");
-                nazwa_r.setString("");
+                if (online)
+                {
+                    wp_nazw_pok = 1;
+                    room.setString("");
+                    nickname.setString("");
+                    client.opLeaveRoom();
+                }
+                else
+                {
+                    wp_nazw = 1;
+                    nazwa_b.setString("");
+                    nazwa_w.setString("");
+                    nazwa_r.setString("");
+                }
                 aktualna_nazwa = 0;
+                menu = 0;
             }
         }
     }
@@ -651,19 +1133,21 @@ void Plansza::obsluga_menu()
                 {
                     nr_trybu = i;
                     z_tryb.setPosition(tryb[i].getPosition());
+                    
+                    if (online) {
+                        if (host)
+                        {
+                            Common::Hashtable eventContent;
+                            eventContent.put("mode", i);
 
-                    if (i != 0)
-                        for (int j = 0; j < 3; j++)
-                        {
-                            czasy[j] = i * 6000;
-                            tczasy[j].setString(std::to_string(i*10) + ":00,0");
+                            nByte eventCode = 1;
+                            ExitGames::LoadBalancing::RaiseEventOptions options;
+
+                            bool eventSent = client.opRaiseEvent(true, eventContent, eventCode, options);
                         }
-                    else
-                        for (int j = 0; j < 3; j++)
-                        {
-                            czasy[j] = 3000;
-                            tczasy[j].setString( "05:00,0");
-                        }
+                    }
+
+                  
                 }
             }
         }
@@ -675,7 +1159,7 @@ void Plansza::obsluga_menu()
 
 
 
-void Plansza::przyciski_na_planszy()
+void Plansza::przyciski_na_planszy(ExitGames::LoadBalancing::Client& client)
 {
     if (powrot.getGlobalBounds().contains((sf::Vector2f)sf::Mouse::getPosition(window)))
     {
@@ -686,7 +1170,32 @@ void Plansza::przyciski_na_planszy()
             {
                 powrot.setScale(window.getSize().y * 0.00018, window.getSize().y * 0.00017);
                 cala_plansza = 0;
-                przejscie2 = 1;
+                if (online)
+                {
+                    client.opLeaveRoom();
+                    wybor_rozgrywki = 1;
+                    plansza.setTexture(p[1]);
+                    plansza.setScale(1 + (float)window.getSize().y / p[0].getSize().y * 0.98, 1 + (float)window.getSize().y / p[0].getSize().y * 0.98);
+                    wyjdz.setScale((float)window.getSize().y / pr.getSize().x * 0.4, (float)window.getSize().y / pr.getSize().x * 0.4);
+                    roomname = "";
+                    nick = "";
+                    usun_p1 = 0;
+                    usun_p2 = 0;
+                    room.setString(roomname);
+                    nickname.setString(nick);
+                    wp_nazw = 0;
+                    nazwa_b.setString("");
+                    nazwa_w.setString("");
+                    nazwa_r.setString("");
+                    aktualna_nazwa = 0;
+                    menu = 0;
+                    attemptedJoinOrCreate = false;
+                    online = 0;
+                    host_started = 0;
+
+                }
+                else
+                    przejscie2 = 1;
      
             }
         }
@@ -694,7 +1203,7 @@ void Plansza::przyciski_na_planszy()
     else
         powrot.setScale(window.getSize().y * 0.00018, window.getSize().y * 0.00017);
 
-    if (restart.getGlobalBounds().contains((sf::Vector2f)sf::Mouse::getPosition(window)))
+    if (restart.getGlobalBounds().contains((sf::Vector2f)sf::Mouse::getPosition(window)) && !online)
     {
         restart.setScale(window.getSize().y * 0.00023, window.getSize().y * 0.00021);
         if (event.type == sf::Event::MouseButtonPressed)
@@ -826,7 +1335,7 @@ bool Plansza::spr_mat(std::shared_ptr<Figura>& krol)
 
 
 
-void Plansza::przeniesienie_figury()
+void Plansza::przeniesienie_figury(ExitGames::LoadBalancing::Client& client)
 {
     is_move = 0;
   
@@ -840,6 +1349,7 @@ void Plansza::przeniesienie_figury()
                 {
 
                     k->set_polozenie(pola[i1][i2][i3]);
+                   
 
              
                     std::shared_ptr<Figura> zbita = nullptr;
@@ -933,8 +1443,30 @@ void Plansza::przeniesienie_figury()
                         i4->setPosition(i4->getPosition().x, i4->getPosition().y + w_size * 0.02);
                     }
 
-                    text.setString(k->get_nazwa() + "        " + pol_s.get_pole_tab() + "    ->    " + pola[i1][i2][i3].get_pole_tab());
+                    if (client.getState() == PeerStates::Joined) {
+                        int playerNr = client.getLocalPlayer().getNumber();
+                      
 
+                        Common::Hashtable eventContent;
+                      
+                        int nextTurn = (ruch + 1) % 3;
+                        eventContent.put("turn", ruch);
+                        eventContent.put("from_part", pol_s.get_czesc_planszy());
+                        eventContent.put("from_x", pol_s.get_x());
+                        eventContent.put("from_y", pol_s.get_y());
+                        eventContent.put("to_part", pola[i1][i2][i3].get_czesc_planszy());
+                        eventContent.put("to_x", pola[i1][i2][i3].get_x());
+                        eventContent.put("to_y", pola[i1][i2][i3].get_y());
+
+                        nByte eventCode = 1;
+                        ExitGames::LoadBalancing::RaiseEventOptions options;
+                      
+                        bool eventSent = client.opRaiseEvent(true, eventContent, eventCode, options);
+
+                        std::cout << "Zdarzenie wys³ane: " << (eventSent ? "sukces" : "b³¹d") << std::endl;
+                    }
+
+                    text.setString(k->get_nazwa() + "        " + pol_s.get_pole_tab() + "    ->    " + pola[i1][i2][i3].get_pole_tab());
                     text.setOrigin(text.getGlobalBounds().width, 0);
                     if (k->get_kolor() == 0)
                         text.setFillColor(sf::Color::White);
@@ -951,9 +1483,12 @@ void Plansza::przeniesienie_figury()
         }
 
     }
-    if (!poprawne_przeniesienie)
+    if (!poprawne_przeniesienie) {
         k->set_polozenie(pol_s);
+       
+    }
     poprawne_przeniesienie = 0;
+    k = nullptr;
 }
 
 
@@ -971,4 +1506,100 @@ void pola_w_tablicy(Pole pola[3][8][4], int sx, int sy, int rozmiar)
 
         }
     }
+}
+
+
+
+void Plansza::przeniesienie_figury_przeciwnika()
+{
+     for (auto j = fig.begin(); j != fig.end(); j++)
+        if ((*j)->get_pole() == pola[(listener.receivedEventData["to_part"])][(listener.receivedEventData["to_x"])][(listener.receivedEventData["to_y"])] /*&& (*j)->get_kolor() != k->get_kolor()*/)
+        {
+            fig.erase(j);
+            break;
+        }
+    for (auto i : fig)
+    {
+
+        if (i->get_pole() == pola[(listener.receivedEventData["from_part"])][(listener.receivedEventData["from_x"])][(listener.receivedEventData["from_y"])] /*&& (*j) != k*/) {
+             
+
+            i->set_polozenie(pola[(listener.receivedEventData["to_part"])][(listener.receivedEventData["to_x"])][(listener.receivedEventData["to_y"])]);
+
+            if (zagrania.size() >= 10)
+            {
+                zagrania.pop_front();
+
+            }
+            for (auto j = zagrania.begin(); j != zagrania.end(); j++)
+            {
+                j->setPosition(j->getPosition().x, j->getPosition().y + w_size * 0.02);
+            }
+            text.setString(i->get_nazwa() + "        " + pola[(listener.receivedEventData["from_part"])][(listener.receivedEventData["from_x"])][(listener.receivedEventData["from_y"])].get_pole_tab() + "    ->    " + pola[(listener.receivedEventData["to_part"])][(listener.receivedEventData["to_x"])][(listener.receivedEventData["to_y"])].get_pole_tab());
+
+            text.setOrigin(text.getGlobalBounds().width, 0);
+            if (i->get_kolor() == 0)
+                text.setFillColor(sf::Color::White);
+            else if (i->get_kolor() == 1)
+                text.setFillColor(sf::Color::Black);
+            else
+                text.setFillColor(sf::Color::Red);
+            zagrania.push_back(text);
+
+            for (int i = 0; i < 3; i++)
+            {
+                if (spr_szach(fig[i]))
+                {
+                    szach[i] = true;
+                    if (spr_mat(fig[i]))
+                    {
+                        mat = 1;
+                        szachh.setString("MAT!");
+                        szachh.setPosition(window.getSize().x * 0.88, window.getSize().y * 0.3);
+                        kolej_g.setString("Wygrywa:");
+                    }
+                }
+                else
+                    szach[i] = false;
+            }
+
+            if (!mat)
+            {
+                if (listener.receivedEventData["turn"] == 1)
+                {
+                    podswietlenie.setTexture(sw_c);
+                    kolej_gn.setString(nazwa_b.getString());
+                }
+                else if (listener.receivedEventData["turn"] == 2)
+                {
+                    podswietlenie.setTexture(sw);
+                    kolej_gn.setString(nazwa_r.getString());
+                }
+                else
+                {
+                    podswietlenie.setTexture(sw_b);
+                    kolej_gn.setString(nazwa_w.getString());
+                }
+            }
+            else
+            {
+                if (listener.receivedEventData["turn"] == 1)
+                {
+                    podswietlenie.setTexture(sw_c);
+                    kolej_gn.setString(nazwa_w.getString());
+                }
+                else if (listener.receivedEventData["turn"] == 2)
+                {
+                    podswietlenie.setTexture(sw);
+                    kolej_gn.setString(nazwa_b.getString());
+                }
+                else
+                {
+                    podswietlenie.setTexture(sw_b);
+                    kolej_gn.setString(nazwa_r.getString());
+                }
+            }
+        }
+    }     
+    k = nullptr;  
 }
